@@ -5,65 +5,96 @@ import os
 
 #1.Set up the database management(MySQL)
 
+# 1. Set up the database management (MySQL)
+
 def init_db():
-    try :
+    try:
         mydb = mysql.connector.connect(
-        host = "localhost",
-        user = "root",
-        password = "123"
+            host="localhost",
+            user="root",
+            password="123"
         )
         cursor = mydb.cursor()
 
-        #Create database if not exists 
+        # Create database if not exists 
         cursor.execute("CREATE DATABASE IF NOT EXISTS community_issues")
         cursor.execute("USE community_issues")
         cursor.execute('''
-                CREATE TABLE IF NOT EXISTS issues (
+            CREATE TABLE IF NOT EXISTS issues (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
                 category VARCHAR(100) NOT NULL,
                 description TEXT NOT NULL,
                 action_plan TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
-            ''')
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         mydb.commit()
+
+        # Safely add the status column to an existing table if it doesn't exist yet
+        try:
+            cursor.execute("ALTER TABLE issues ADD COLUMN status VARCHAR(50) DEFAULT 'Open'")
+            mydb.commit()
+        except mysql.connector.Error:
+            # Column already exists, safe to ignore
+            pass
+
         cursor.close()
         mydb.close()
     except mysql.connector.Error as err:
         st.error(f"Database error: {err}")
 
-#Save all the user data alogside the AI response using MySQL syntax 
-def save_issue(title,category,description,action_plan):
+# Save all the user data alongside the AI response using MySQL syntax 
+def save_issue(title, category, description, action_plan):
     try:
         mydb = mysql.connector.connect(
-        host = "localhost",
-        user = "root",
-        password = "123",
-        database = "community_issues"
+            host="localhost",
+            user="root",
+            password="123",
+            database="community_issues"
         )
         cursor = mydb.cursor()
         query = '''
-            INSERT INTO issues (title,category,description,action_plan)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO issues (title, category, description, action_plan, status)
+            VALUES (%s, %s, %s, %s, 'Open')
             '''
-        cursor.execute(query,(title,category,description,action_plan))
+        cursor.execute(query, (title, category, description, action_plan))
         mydb.commit()
         cursor.close()
         mydb.close()
     except mysql.connector.Error as err:
         st.error(f"Database error: {err}")
 
-#retrive all the community logs from the MYSQL database 
+# Update the status of an issue (Open <-> Resolved)
+def update_issue_status(issue_id, new_status):
+    try:
+        mydb = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="123",
+            database="community_issues"
+        )
+        cursor = mydb.cursor()
+        query = "UPDATE issues SET status = %s WHERE id = %s"
+        cursor.execute(query, (new_status, issue_id))
+        mydb.commit()
+        cursor.close()
+        mydb.close()
+    except mysql.connector.Error as err:
+        st.error(f"Database error while updating status: {err}")
+
+# Retrieve all the community logs from the MYSQL database 
 def fetch_issues():
     try:
         mydb = mysql.connector.connect(
-        host = "localhost",
-        user = "root",
-        password = "123",
-        database = "community_issues"
+            host="localhost",
+            user="root",
+            password="123",
+            database="community_issues"
         )
         cursor = mydb.cursor()
-        cursor.execute("SELECT * FROM issues ORDER BY timestamp DESC")
+        # Explicitly fetching status along with other columns
+        cursor.execute("SELECT id, title, category, description, action_plan, timestamp, status FROM issues ORDER BY timestamp DESC")
         rows = cursor.fetchall()
         cursor.close()
         mydb.close()
@@ -89,7 +120,8 @@ def generate_action_plan(api_key,title,category,description):
        Detailed Description: {description}
        
        Please provide a structured ,practical , and localized action plan to address this issue.
-       Keep your response friendly but direct. Structure it with 3 distinct,sequential steps label 'Step 1','Step 2','Step 3' so residents can act immediately
+       Keep your response friendly but direct. Structure it with 3 distinct,sequential steps label 'Step 1','Step 2','Step 3' so residents can act immediately.
+       The action plan should be based on the local context of Malaysia, considering common community resources and local government processes.
        """
         
         response = client.models.generate_content(
@@ -100,6 +132,8 @@ def generate_action_plan(api_key,title,category,description):
     except Exception as e:
         return f"API Error:Unable to generate response.Details :  {str(e)}"
     
+
+
 #Streamlit UI
 
 st.set_page_config(page_title ="Community Action Hub (MySQL Edition)",layout= "wide")
@@ -144,18 +178,39 @@ with col2:
     past_log = fetch_issues()
 
     if not past_log:
-        st.info("There is no issue log yet. Be the first one to report a problem in your community!")
+        st.info("There is no issue log yet. Be the first one to report a problem in your community.")
     else:
         for entry in past_log:
-            title,category,raw_desc,ai_plan,timestamp = entry[1],entry[2],entry[3],entry[4],entry[5]
+            issue_id = entry[0]
+            title = entry[1]
+            category = entry[2]
+            description = entry[3]
+            action_plan = entry[4]
+            timestamp = entry[5]
+            status = entry[6]
 
-            #Format the timestamp to a more human-friendly format
+            # Format the timestamp to a more human-friendly format
+            str_timestamp = timestamp.strftime("%Y-%m-%d %H:%M") if hasattr(timestamp, "strftime") else str(timestamp)[:16]
 
-            str_timestamp = timestamp.strftime("%Y-%m-%d %H:%M") if hasattr(timestamp,"strftime")else str(timestamp)[:16]
+            # Append emoji indicators based on open status
+            status_emoji = "⏳" if status == "Open" else "✅"
 
-            with st.expander (f" [{category}] {title} - {str_timestamp}"):
-                st.markdown("**Resident Complaint:**")
-                st.write(raw_desc)
+            with st.expander(f"{status_emoji} [{category}] {title} -  {str_timestamp}"):
+                st.markdown("**Status:** " + (f"🔴 `{status}`" if status == "Open" else f"🟢 `{status}`"))
+                st.markdown("**Resident Complain**")
+                st.write(description)
                 st.markdown("---")
-                st.markdown("**AI-Generated Action Plan:**")
-                st.write(ai_plan)
+                st.markdown("AI_Generated Action Plan:")
+                st.write(action_plan)
+                st.markdown("---")
+
+                #Render Resolve /Repoen button conditional actions 
+                if status == "Open":
+                    if st.button("Mark as Resolved",key = f"resolve_{issue_id}"):
+                        update_issue_status(issue_id,'Resolved')
+                        st.rerun()
+                else:
+                    if st.button("Re Open Issue", key = f"reopen_{issue_id}"):
+                        update_issue_status(issue_id,"Open")
+                        st.rerun()
+
