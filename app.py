@@ -48,11 +48,12 @@ def init_db():
 def save_issue(title, category, description, action_plan):
     try:
         mydb = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="123",
-            database="community_issues"
-        )
+             host=st.secrets["DB_HOST"],
+             user=st.secrets["DB_USER"],
+             password=st.secrets["DB_PASS"],
+             database=st.secrets["DB_NAME"],
+             port=int(st.secrets.get("DB_PORT", 3306)) # Cloud databases often use custom ports
+)
         cursor = mydb.cursor()
         query = '''
             INSERT INTO issues (title, category, description, action_plan, status)
