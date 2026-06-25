@@ -3,22 +3,36 @@ import mysql.connector
 from google import genai
 import os
 
-#1.Set up the database management(MySQL)
+# ==========================================
+# 1. CENTRALIZED DATABASE CONNECTION HELPER
+# ==========================================
+def get_db_connection(include_db=True):
+    """Establishes a uniform connection using cloud secrets."""
+    config = {
+        "host": st.secrets["DB_HOST"],
+        "user": st.secrets["DB_USER"],
+        "password": st.secrets["DB_PASS"],
+        "port": int(st.secrets.get("DB_PORT", 3306))
+    }
+    # Only append database name if initialized (init_db creates it first)
+    if include_db:
+        config["database"] = st.secrets["DB_NAME"]
+        
+    return mysql.connector.connect(**config)
 
-# 1. Set up the database management (MySQL)
 
+# ==========================================
+# 2. DATABASE MANAGEMENT LOGIC
+# ==========================================
 def init_db():
     try:
-        mydb = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="123"
-        )
+        # Connect without specific DB name first to ensure schema exists
+        mydb = get_db_connection(include_db=False)
         cursor = mydb.cursor()
 
         # Create database if not exists 
-        cursor.execute("CREATE DATABASE IF NOT EXISTS community_issues")
-        cursor.execute("USE community_issues")
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {st.secrets['DB_NAME']}")
+        cursor.execute(f"USE {st.secrets['DB_NAME']}")
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS issues (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -42,18 +56,11 @@ def init_db():
         cursor.close()
         mydb.close()
     except mysql.connector.Error as err:
-        st.error(f"Database error: {err}")
+        st.error(f"Database initialization error: {err}")
 
-# Save all the user data alongside the AI response using MySQL syntax 
 def save_issue(title, category, description, action_plan):
     try:
-        mydb = mysql.connector.connect(
-             host=st.secrets["DB_HOST"],
-             user=st.secrets["DB_USER"],
-             password=st.secrets["DB_PASS"],
-             database=st.secrets["DB_NAME"],
-             port=int(st.secrets.get("DB_PORT", 3306)) # Cloud databases often use custom ports
-)
+        mydb = get_db_connection()
         cursor = mydb.cursor()
         query = '''
             INSERT INTO issues (title, category, description, action_plan, status)
@@ -64,17 +71,11 @@ def save_issue(title, category, description, action_plan):
         cursor.close()
         mydb.close()
     except mysql.connector.Error as err:
-        st.error(f"Database error: {err}")
+        st.error(f"Database save error: {err}")
 
-# Update the status of an issue (Open <-> Resolved)
 def update_issue_status(issue_id, new_status):
     try:
-        mydb = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="123",
-            database="community_issues"
-        )
+        mydb = get_db_connection()
         cursor = mydb.cursor()
         query = "UPDATE issues SET status = %s WHERE id = %s"
         cursor.execute(query, (new_status, issue_id))
@@ -84,35 +85,31 @@ def update_issue_status(issue_id, new_status):
     except mysql.connector.Error as err:
         st.error(f"Database error while updating status: {err}")
 
-# Retrieve all the community logs from the MYSQL database 
 def fetch_issues():
     try:
-        mydb = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="123",
-            database="community_issues"
-        )
+        mydb = get_db_connection()
         cursor = mydb.cursor()
-        # Explicitly fetching status along with other columns
         cursor.execute("SELECT id, title, category, description, action_plan, timestamp, status FROM issues ORDER BY timestamp DESC")
         rows = cursor.fetchall()
         cursor.close()
         mydb.close()
         return rows
     except mysql.connector.Error as err:
-        st.error(f"Database error: {err}")
+        st.error(f"Database fetch error: {err}")
         return []
     
-#Initialize the database when the app starts
+# Initialize the database connection structures on launch
 init_db()
     
-#Create the AI Wrapper 
-#We will integerate the prompt into the AI wrapper to generate the action plan based on the user input
-#Promp we use the consept of RACE (Role, Action, Context, Expecation) to generate the action plan
-def generate_action_plan(api_key,title,category,description):
+
+# ==========================================
+# 3. AI WRAPPER ENGINE
+# ==========================================
+def generate_action_plan(api_key, title, category, description):
     try:
-        client = genai.Client(api_key = api_key)
+        # Fallback to local secrets token if sidebar string is omitted
+        api_key_to_use = api_key if api_key else st.secrets["GEMINI_API_KEY"]
+        client = genai.Client(api_key=api_key_to_use)
 
         prompt = f"""
        You are an expert community organizer. A resident has reported a local problem.
@@ -120,62 +117,56 @@ def generate_action_plan(api_key,title,category,description):
        Category: {category}
        Detailed Description: {description}
        
-       Please provide a structured ,practical , and localized action plan to address this issue.
-       Keep your response friendly but direct. Structure it with 3 distinct,sequential steps label 'Step 1','Step 2','Step 3' so residents can act immediately.
+       Please provide a structured, practical, and localized action plan to address this issue.
+       Keep your response friendly but direct. Structure it with 3 distinct, sequential steps label 'Step 1','Step 2','Step 3' so residents can act immediately.
        The action plan should be based on the local context of Malaysia, considering common community resources and local government processes.
        """
         
         response = client.models.generate_content(
-            model = "gemini-2.5-flash",
-            contents = prompt
+            model="gemini-2.5-flash",
+            contents=prompt
         )
         return response.text
     except Exception as e:
-        return f"API Error:Unable to generate response.Details :  {str(e)}"
+        return f"API Error: Unable to generate response. Details: {str(e)}"
     
 
-
-#Streamlit UI
-
-st.set_page_config(page_title ="Community Action Hub (MySQL Edition)",layout= "wide")
+# ==========================================
+# 4. STREAMLIT FRONTEND UI
+# ==========================================
+st.set_page_config(page_title="Community Action Hub (MySQL Edition)", layout="wide")
 st.title("Community Action Hub")
-st.caption("Empowering neighbours with ersistent, production-grade scaling infrastructure.")
+st.caption("Empowering neighbours with persistent, production-grade scaling infrastructure.")
 st.markdown("---")
 
-#Sidebar Configuration
 with st.sidebar:
     st.header("Configuration")
-    user_api_key = st.text_input("Google AI Studio API Key", type="password",help="Input your Germini API key here.")
-    st.markdown("[Get a free Germini API key here](https://aistudio.google.com/api-keys?project=gen-lang-client-0779282876)")
+    user_api_key = st.text_input("Google AI Studio API Key", type="password", help="Input your Gemini API key here.")
+    st.markdown("[Get a free Gemini API key here](https://aistudio.google.com/api-keys)")
 
-#Layout Split 
-col1,col2 = st.columns([2,3],gap="large")  
+col1, col2 = st.columns([2, 3], gap="large")  
 with col1:
     st.subheader("Log Community Issues")
-    with st.form("Issue_submission_form",clear_on_submit = True):
-        issue_title = st.text_input("Short Title /Headline ",placeholder = "Blocked ddrainage at Jalan Jun")
-        issue_category = st.selectbox("Category", ["Infrastructure","Public Safety","Enviroment","Health & Sanitation","Others"])
-        issue_desc = st.text_area("Detailed Context",placeholder = "Provide a detailed description of the issue...")
+    with st.form("Issue_submission_form", clear_on_submit=True):
+        issue_title = st.text_input("Short Title /Headline ", placeholder="Blocked drainage at Jalan Jun")
+        issue_category = st.selectbox("Category", ["Infrastructure", "Public Safety", "Environment", "Health & Sanitation", "Others"])
+        issue_desc = st.text_area("Detailed Context", placeholder="Provide a detailed description of the issue...")
 
         submit_clicked = st.form_submit_button("Submit & Request AI Solution Blueprint")
 
         if submit_clicked:
-            if not user_api_key:
-                st.error("Please enter your Google AI Studio API key in the sidebar.")
+            if not user_api_key and "GEMINI_API_KEY" not in st.secrets:
+                st.error("Please enter your Google AI Studio API key in the sidebar or setup environment configuration secrets.")
             elif not issue_title or not issue_desc:
-                st.warning("What your problem?")
+                st.warning("Please fill out both the title and detailed context before submitting.")
             else:
-                with st.spinner("Analyzing your porblem & structuring task list...."):
-                    #1.Request the AI Generation 
-                    ai_blueprint = generate_action_plan(user_api_key,issue_title,issue_category,issue_desc)
-
-                    #2. Write our feedback to the database 
-                    save_issue(issue_title,issue_category,issue_desc,ai_blueprint)
-
-                    st.success("All your problems had been saved and we will be back to you.")
+                with st.spinner("Analyzing your problem & structuring task list...."):
+                    ai_blueprint = generate_action_plan(user_api_key, issue_title, issue_category, issue_desc)
+                    save_issue(issue_title, issue_category, issue_desc, ai_blueprint)
+                    st.success("All your problems have been saved and we will display them live on the dashboard.")
 
 with col2:
-    st.subheader("Love Neighbourhood Action Board")
+    st.subheader("Live Neighbourhood Action Board")
     past_log = fetch_issues()
 
     if not past_log:
@@ -190,28 +181,23 @@ with col2:
             timestamp = entry[5]
             status = entry[6]
 
-            # Format the timestamp to a more human-friendly format
             str_timestamp = timestamp.strftime("%Y-%m-%d %H:%M") if hasattr(timestamp, "strftime") else str(timestamp)[:16]
-
-            # Append emoji indicators based on open status
             status_emoji = "⏳" if status == "Open" else "✅"
 
-            with st.expander(f"{status_emoji} [{category}] {title} -  {str_timestamp}"):
+            with st.expander(f"{status_emoji} [{category}] {title} - {str_timestamp}"):
                 st.markdown("**Status:** " + (f"🔴 `{status}`" if status == "Open" else f"🟢 `{status}`"))
-                st.markdown("**Resident Complain**")
+                st.markdown("**Resident Complaint:**")
                 st.write(description)
                 st.markdown("---")
-                st.markdown("AI_Generated Action Plan:")
+                st.markdown("**AI-Generated Action Plan:**")
                 st.write(action_plan)
                 st.markdown("---")
 
-                #Render Resolve /Repoen button conditional actions 
                 if status == "Open":
-                    if st.button("Mark as Resolved",key = f"resolve_{issue_id}"):
-                        update_issue_status(issue_id,'Resolved')
+                    if st.button("Mark as Resolved", key=f"resolve_{issue_id}"):
+                        update_issue_status(issue_id, 'Resolved')
                         st.rerun()
                 else:
-                    if st.button("Re Open Issue", key = f"reopen_{issue_id}"):
-                        update_issue_status(issue_id,"Open")
+                    if st.button("Reopen Issue", key=f"reopen_{issue_id}"):
+                        update_issue_status(issue_id, "Open")
                         st.rerun()
-
