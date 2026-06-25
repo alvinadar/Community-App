@@ -26,13 +26,11 @@ def get_db_connection(include_db=True):
 # ==========================================
 def init_db():
     try:
-        # Connect without specific DB name first to ensure schema exists
-        mydb = get_db_connection(include_db=False)
+        # FIX: Connect DIRECTLY to your assigned cloud database right away
+        mydb = get_db_connection(include_db=True)
         cursor = mydb.cursor()
 
-        # Create database if not exists 
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {st.secrets['DB_NAME']}")
-        cursor.execute(f"USE {st.secrets['DB_NAME']}")
+        # REMOVED: CREATE DATABASE and USE commands because the cloud provider handles that!
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS issues (
                 id INT AUTO_INCREMENT PRIMARY KEY,
